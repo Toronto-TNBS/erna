@@ -7,6 +7,7 @@ import pandas as pd
 from math import floor
 from sonpy import lib as sonp
 import io
+from scipy.signal import find_peaks
 
 @st.cache
 def filename_list(sidebar_path):
@@ -80,7 +81,7 @@ def main():
     tab1, tab2, tab3 = st.tabs(["Raw Data", "Evoked Fields", "Database"])
 
     with tab2:
-        peak_locs = sp.signal.find_peaks(raw_data, height=4, distance=round((1/select_stim_frequency)/2*fs))[0]
+        peak_locs = find_peaks(raw_data, height=4, distance=round((1/select_stim_frequency)/2*fs))[0]
         
         win = int(np.floor((1/select_stim_frequency)*fs))
         
