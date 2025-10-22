@@ -5,11 +5,11 @@ import plotly.graph_objects as go
 import streamlit as st
 import pandas as pd
 from math import floor
-from sonpy import lib as sonp
+import neo
 import io
 from scipy.signal import find_peaks
 
-@st.cache
+@st.cache_data
 def filename_list(sidebar_path):
     smr_files = []
     
@@ -28,29 +28,26 @@ def filename_list(sidebar_path):
     
     return numbered_smr_files, smr_files
 
-@st.cache
+@st.cache_data
 def import_smr(filename, path, WaveChan):
-    
     FilePath = path + "/" + filename
 
-    MyFile = sonp.SonFile(FilePath, True)
-    
-    dMaxTime = MyFile.ChannelMaxTime(WaveChan)*MyFile.GetTimeBase()
-    
-    dPeriod = MyFile.ChannelDivide(WaveChan)*MyFile.GetTimeBase()
-    nPoints = floor(dMaxTime/dPeriod)
-    
-    raw_data = np.array(MyFile.ReadFloats(WaveChan, nPoints, 0))
-    fs = float(1/dPeriod)
-    
-    t = np.arange(0,len(raw_data))/fs
-    
-    t_start = float(t[0])
-    t_stop = float(t[-1])
+    reader = neo.io.Spike2IO(filename=FilePath)
+    block = reader.read_block(lazy=False)
+    seg = block.segments[0]
+
+    signal = seg.analogsignals[WaveChan]
+
+    raw_data = np.array(signal).flatten()
+    fs = float(signal.sampling_rate)
+
+    t = np.arange(len(raw_data)) / fs
+    t_start = float(signal.t_start)
+    t_stop = float(signal.t_stop)
     
     return raw_data, fs, t_start, t_stop, t
 
-@st.cache
+@st.cache_data
 def convert_df(df):
     return df.to_csv().encode('utf-8')
 
@@ -65,14 +62,21 @@ def main():
         
     FilePath = sidebar_path + "/" + sidebar_filename
 
-    MyFile = sonp.SonFile(FilePath, True)
+    reader = neo.io.Spike2IO(filename=FilePath)
+    block = reader.read_block(lazy=False)
+    seg = block.segments[0]
     
     channels_all = []
+    for i, signal in enumerate(seg.analogsignals):
+        chan_names = signal.array_annotations.get("channel_names", [])
+        if len(chan_names) > 0:
+            channels_all.extend(chan_names)
+        else:
+            channels_all.append(f"Channel {i+1}")
+
     
-    for i in range(MyFile.MaxChannels()-1):
-        channels_all.append("Channel "+str(i+1) + ": " + str(MyFile.GetChannelTitle(i)))
-    
-    select_channel = channels_all.index(st.sidebar.selectbox('Enter channel to import: ', channels_all))
+    selected_name = st.sidebar.selectbox('Enter channel to import: ', channels_all)
+    select_channel = channels_all.index(selected_name)
 
     select_stim_frequency = 100
     
@@ -240,14 +244,21 @@ def main():
         )
 
     with tab3:
-
-        df = pd.DataFrame(np.array(database))
-        df.columns = ['Type','Stim', 'Timestamp (s)','Voltage (V)', 'Latency (ms)']
+        if len(database) == 0:
+            st.warning("No data to display.")
+            return
+    
+        # Ensure consistent structure for database
+        if isinstance(database[0], (int, float, str)):
+            database = [database]
+    
+        df = pd.DataFrame(database, columns=['Type', 'Stim', 'Timestamp (s)', 'Voltage (V)', 'Latency (ms)'])
         df[["Stim", "Timestamp (s)", "Voltage (V)", "Latency (ms)"]] = df[["Stim", "Timestamp (s)", "Voltage (V)", "Latency (ms)"]].apply(pd.to_numeric)
-        df.sort_values(by=['Timestamp (s)'])
+        df.sort_values(by=['Timestamp (s)'], inplace=True)
         
         st.dataframe(df)
-        st.download_button(label="Download data as CSV",data=convert_df(df),file_name=sidebar_filename[0:-4]+'.csv', mime='text/csv')     
+        st.download_button(label="Download data as CSV", data=convert_df(df), file_name=sidebar_filename[0:-4]+'.csv', mime='text/csv')
+    
     
 st.title('ERNA Analysis')
 st.subheader('By Srdjan Sumarac')
