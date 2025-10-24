@@ -8,6 +8,8 @@ from math import floor
 import neo
 import io
 from scipy.signal import find_peaks
+import subprocess
+import sys
 
 @st.cache_data
 def filename_list(sidebar_path):
@@ -267,3 +269,8 @@ sidebar_path = st.sidebar.text_input('Path to .smr files')
 
 if len(sidebar_path) > 0:
     main()
+
+if __name__ == "__main__" and "STREAMLIT_RUNNING" not in os.environ:
+    os.environ["STREAMLIT_RUNNING"] = "1"
+    script_path = os.path.abspath(__file__)
+    subprocess.run([sys.executable, "-m", "streamlit", "run", script_path])
