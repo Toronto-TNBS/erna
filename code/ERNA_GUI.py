@@ -79,16 +79,28 @@ def main():
     
     selected_name = st.sidebar.selectbox('Enter channel to import: ', channels_all)
     select_channel = channels_all.index(selected_name)
-
-    select_stim_frequency = 100
+    
+    select_stim_frequency = st.sidebar.number_input("Stimulation frequency", min_value=1, max_value=300, value=100)
     
     raw_data, fs, t_start, t_stop, t = import_smr(sidebar_filename, sidebar_path, select_channel)
     
     tab1, tab2, tab3 = st.tabs(["Raw Data", "Evoked Fields", "Database"])
 
     with tab2:
-        peak_locs = find_peaks(raw_data, height=4, distance=round((1/select_stim_frequency)/2*fs))[0]
+        thresh = np.percentile(np.abs(raw_data), 99.9)
         
+        pos = find_peaks(raw_data, height=thresh,
+                         distance=round((1 / select_stim_frequency) / 2 * fs))[0]
+        neg = find_peaks(-raw_data, height=thresh,
+                         distance=round((1 / select_stim_frequency) / 2 * fs))[0]
+        
+        peak_locs = neg if (
+            len(neg) > 0 and (
+                np.max(np.abs(raw_data[neg])) >
+                np.max(np.abs(raw_data[pos])) if len(pos) > 0 else True
+            )
+        ) else pos
+
         win = int(np.floor((1/select_stim_frequency)*fs))
         
         evoked_fields = np.empty([1, win])
