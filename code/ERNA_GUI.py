@@ -1,4 +1,6 @@
 import os
+import warnings
+warnings.filterwarnings("ignore", message="Units .* can not be converted")
 import numpy as np
 import scipy as sp
 import plotly.graph_objects as go
@@ -14,25 +16,25 @@ import sys
 @st.cache_data
 def filename_list(sidebar_path):
     smr_files = []
-    
+
     for file in os.listdir(sidebar_path):
         if file.endswith('.smr'):
             smr_files.append(file)
-            
+
     smr_files.sort()
-    
+
     file_numbers = list(map(str,list(range(0,len(smr_files)))))
-    
+
     numbered_smr_files =[]
-    
+
     for x in range(len(smr_files)):
         numbered_smr_files.append(file_numbers[x] + ': ' + smr_files[x])
-    
+
     return numbered_smr_files, smr_files
 
 @st.cache_data
 def import_smr(filename, path, WaveChan):
-    FilePath = path + "/" + filename
+    FilePath = os.path.join(path, filename)
 
     reader = neo.io.Spike2IO(filename=FilePath)
     block = reader.read_block(lazy=False)
@@ -40,13 +42,13 @@ def import_smr(filename, path, WaveChan):
 
     signal = seg.analogsignals[WaveChan]
 
-    raw_data = np.array(signal).flatten()
+    raw_data = np.array(signal, dtype=float).flatten()
     fs = float(signal.sampling_rate)
 
     t = np.arange(len(raw_data)) / fs
     t_start = float(signal.t_start)
     t_stop = float(signal.t_stop)
-    
+
     return raw_data, fs, t_start, t_stop, t
 
 @st.cache_data
@@ -56,18 +58,18 @@ def convert_df(df):
 def main():
 
     numbered_smr_files, smr_files = filename_list(sidebar_path)
-    
+
     sidebar_filename_numbered = st.sidebar.selectbox('Select a file',numbered_smr_files)
     sidebar_filename = smr_files[numbered_smr_files.index(sidebar_filename_numbered)]
-    
+
     file_indices = [i for i, s in enumerate(smr_files) if sidebar_filename in s]
-        
-    FilePath = sidebar_path + "/" + sidebar_filename
+
+    FilePath = os.path.join(sidebar_path, sidebar_filename)
 
     reader = neo.io.Spike2IO(filename=FilePath)
     block = reader.read_block(lazy=False)
     seg = block.segments[0]
-    
+
     channels_all = []
     for i, signal in enumerate(seg.analogsignals):
         chan_names = signal.array_annotations.get("channel_names", [])
@@ -76,93 +78,144 @@ def main():
         else:
             channels_all.append(f"Channel {i+1}")
 
-    
+
     selected_name = st.sidebar.selectbox('Enter channel to import: ', channels_all)
     select_channel = channels_all.index(selected_name)
-    
-    select_stim_frequency = st.sidebar.number_input("Stimulation frequency", min_value=1, max_value=300, value=100)
-    
+
     raw_data, fs, t_start, t_stop, t = import_smr(sidebar_filename, sidebar_path, select_channel)
-    
+    n_samples = len(raw_data)
+
+    # --- Auto-detect stimulation frequency ---
+    # Threshold: 3 standard deviations above the mean
+    signal_mean = np.mean(raw_data)
+    signal_std = np.std(raw_data)
+    pos_thresh = signal_mean + 3 * signal_std
+    neg_thresh = -signal_mean + 3 * signal_std  # for inverted signal
+
+    # Minimum distance between stim artifacts: 4 ms
+    min_dist_4ms = max(1, round(0.004 * fs))
+
+    # Detect stim artifacts in both polarities with 3SD threshold and 4ms min distance
+    pos_detect = find_peaks(raw_data, height=pos_thresh, distance=min_dist_4ms)[0]
+    neg_detect = find_peaks(-raw_data, height=neg_thresh, distance=min_dist_4ms)[0]
+
+    # Pick the polarity with more detections — that's the stim artifact direction
+    if len(neg_detect) > len(pos_detect):
+        stim_peaks = neg_detect
+    else:
+        stim_peaks = pos_detect
+
+    # Compute stim frequency from median inter-peak interval
+    if len(stim_peaks) > 2:
+        intervals = np.diff(stim_peaks)
+        # Filter out outlier intervals (pauses, double-detections)
+        med_interval = np.median(intervals)
+        regular = intervals[(intervals > med_interval * 0.5) & (intervals < med_interval * 2.0)]
+        if len(regular) > 0:
+            detected_freq = round(fs / np.median(regular))
+        else:
+            detected_freq = round(fs / med_interval)
+    elif len(stim_peaks) == 2:
+        detected_freq = round(fs / np.diff(stim_peaks)[0])
+    else:
+        detected_freq = 100
+
+    select_stim_frequency = st.sidebar.number_input(
+        "Stimulation frequency (auto-detected)",
+        min_value=1, max_value=300, value=int(detected_freq))
+
+    st.sidebar.caption(f"Detected: {detected_freq} Hz")
+
+    # --- Final stim artifact detection with detected frequency ---
+    # Use half the stim period as min distance for final detection
+    min_distance = max(1, round((1 / select_stim_frequency) / 2 * fs))
+    pos = find_peaks(raw_data, height=pos_thresh, distance=min_distance)[0]
+    neg = find_peaks(-raw_data, height=neg_thresh, distance=min_distance)[0]
+
+    peak_locs = neg if (
+        len(neg) > 0 and (
+            np.max(np.abs(raw_data[neg])) >
+            np.max(np.abs(raw_data[pos])) if len(pos) > 0 else True
+        )
+    ) else pos
+
+    st.sidebar.caption(f"Stim artifacts detected: {len(peak_locs)}")
+
+    if len(peak_locs) == 0:
+        st.error("No stim artifacts detected. Try adjusting the channel or frequency.")
+        return
+
     tab1, tab2, tab3 = st.tabs(["Raw Data", "Evoked Fields", "Database"])
 
     with tab2:
-        thresh = np.percentile(np.abs(raw_data), 99.9)
-        
-        pos = find_peaks(raw_data, height=thresh,
-                         distance=round((1 / select_stim_frequency) / 2 * fs))[0]
-        neg = find_peaks(-raw_data, height=thresh,
-                         distance=round((1 / select_stim_frequency) / 2 * fs))[0]
-        
-        peak_locs = neg if (
-            len(neg) > 0 and (
-                np.max(np.abs(raw_data[neg])) >
-                np.max(np.abs(raw_data[pos])) if len(pos) > 0 else True
-            )
-        ) else pos
-
         win = int(np.floor((1/select_stim_frequency)*fs))
-        
-        evoked_fields = np.empty([1, win])
-        
+
         x = st.slider('Window slider',min_value=-50,max_value=50, value = -10)
 
+        # Collect valid evoked fields using a list (faster than np.append in loop)
+        evoked_list = []
         for i in peak_locs:
-            temp = raw_data[i+x:i+win+x]
-            evoked_fields = np.append(evoked_fields, temp.reshape(1, win), axis=0)
-            
-        evoked_fields = np.delete(evoked_fields,0,axis=0)
-        
-        average_EV = np.mean(evoked_fields, axis=0)
-        
+            start = i + x
+            stop = i + win + x
+            if start < 0 or stop > n_samples:
+                continue
+            evoked_list.append(raw_data[start:stop])
+
+        if len(evoked_list) == 0:
+            st.warning("No valid evoked fields found. Try adjusting the window slider.")
+            average_EV = np.zeros(win)
+        else:
+            evoked_fields = np.array(evoked_list)
+            average_EV = np.mean(evoked_fields, axis=0)
+
         t_EV = np.array(range(0,len(average_EV)))
-        
+
         fig2 = go.Figure(data=go.Scatter(
-                x = t_EV, 
-                y = average_EV, 
+                x = t_EV,
+                y = average_EV,
                 mode = 'lines',
                 name='Stim_EV',
                 line = dict(color='black'),
                 showlegend=False))
-        
+
         left, right = st.columns(2)
-        
+
         POI_peaks = left.multiselect('Select peaks of interest', range(0,len(average_EV)))
         POI_troughs = right.multiselect('Select troughs of interest', range(0,len(average_EV)))
-        
+
         POI_baseline = 0
-        
+
         auto_win = st.slider('Auto-calulation window:', min_value=1, max_value=20, value = 10)
-        
+
         fig2.add_trace(go.Scatter(
                 x=POI_peaks,
                 y=average_EV[POI_peaks],
                 mode='markers',
                 marker = dict(color = 'red'),
                 showlegend=False))
-        
+
         fig2.add_trace(go.Scatter(
                 x=POI_troughs,
                 y=average_EV[POI_troughs],
                 mode='markers',
                 marker = dict(color = 'blue'),
-                showlegend=False))  
-        
+                showlegend=False))
+
         fig2.add_trace(go.Scatter(
                 x=[POI_baseline],
                 y=[average_EV[POI_baseline]],
                 mode='markers',
                 marker = dict(color = 'orange'),
-                showlegend=False))  
-        
+                showlegend=False))
+
         for h in POI_peaks:
-        
+
             fig2.add_shape(type='line',
                 x0=h-auto_win,x1=h-auto_win,
                 y0=min(average_EV),y1=max(average_EV),
                 line = dict(color='red'),
                 name='Auto Calc Start')
-        
+
             fig2.add_shape(type='line',
                 x0=h+auto_win,x1=h+auto_win,
                 y0=min(average_EV),y1=max(average_EV),
@@ -170,80 +223,97 @@ def main():
                 name='Auto Calc Stop')
 
         for h2 in POI_troughs:
-        
+
             fig2.add_shape(type='line',
                 x0=h2-auto_win,x1=h2-auto_win,
                 y0=min(average_EV),y1=max(average_EV),
                 line = dict(color='blue'),
                 name='Auto Calc Start')
-        
+
             fig2.add_shape(type='line',
                 x0=h2+auto_win,x1=h2+auto_win,
                 y0=min(average_EV),y1=max(average_EV),
                 line = dict(color='blue'),
                 name='Auto Calc Stop')
 
-        
+
         fig2.update_layout(
                 width=500,
                 )
-        
+
         st.plotly_chart(fig2)
 
     with tab1:
-        
+
         fig = go.Figure(data=go.Scatter(
-        x = t, 
-        y = raw_data, 
+        x = t,
+        y = raw_data,
         mode = 'lines',
         name='Raw Data',
         line = dict(color='darkgreen'),
         showlegend=False))
 
         database = []
-        
+
         for idx, r in enumerate(peak_locs):
-            
-            database.append(['Baseline',idx+1,(POI_baseline+x+r)/fs,raw_data[POI_baseline+x+r], 0])
-            
+
+            baseline_idx = POI_baseline + x + r
+            # Skip if baseline index is out of bounds
+            if baseline_idx < 0 or baseline_idx >= n_samples:
+                continue
+
+            database.append(['Baseline',idx+1, baseline_idx/fs, raw_data[baseline_idx], 0])
+
             fig.add_trace(go.Scatter(
-                    x=[(POI_baseline+x+r)/fs],
-                    y=[raw_data[POI_baseline+x+r]],
+                    x=[baseline_idx/fs],
+                    y=[raw_data[baseline_idx]],
                     mode='markers',
                     marker = dict(color = 'orange'),
-                    showlegend=False))  
+                    showlegend=False))
 
             for idx1, d in enumerate(POI_peaks):
-                
-                max_peaks = np.argmax(raw_data[d+x+r-auto_win:d+x+r+auto_win])
-                
-                loc = d+x+r+max_peaks-auto_win
-                
-                database.append(['Peak '+str(idx1+1),int(idx+1),loc/fs, raw_data[loc],(loc/fs - (POI_baseline+x+r)/fs)*1000])
-                
+
+                search_start = d + x + r - auto_win
+                search_stop = d + x + r + auto_win
+                # Skip if search window is out of bounds
+                if search_start < 0 or search_stop > n_samples:
+                    continue
+
+                max_peaks = np.argmax(raw_data[search_start:search_stop])
+
+                loc = search_start + max_peaks
+
+                database.append(['Peak '+str(idx1+1),int(idx+1),loc/fs, raw_data[loc],(loc/fs - baseline_idx/fs)*1000])
+
                 fig.add_trace(go.Scatter(
                         x=[loc/fs],
                         y=[raw_data[loc]],
                         mode='markers',
                         marker = dict(color = 'red'),
-                        showlegend=False))  
-                
-            
+                        showlegend=False))
+
+
             for idx2, d2 in enumerate(POI_troughs):
-                
-                min_peaks = np.argmin(raw_data[d2+x+r-auto_win:d2+x+r+auto_win])
-                
-                loc2 = d2+x+r+min_peaks-auto_win
-                
-                database.append(['Trough '+str(idx2+1),idx+1,loc2/fs,raw_data[loc2],(loc2/fs - (POI_baseline+x+r)/fs)*1000])
-                
+
+                search_start2 = d2 + x + r - auto_win
+                search_stop2 = d2 + x + r + auto_win
+                # Skip if search window is out of bounds
+                if search_start2 < 0 or search_stop2 > n_samples:
+                    continue
+
+                min_peaks = np.argmin(raw_data[search_start2:search_stop2])
+
+                loc2 = search_start2 + min_peaks
+
+                database.append(['Trough '+str(idx2+1),idx+1,loc2/fs,raw_data[loc2],(loc2/fs - baseline_idx/fs)*1000])
+
                 fig.add_trace(go.Scatter(
-                        x=[(loc2)/fs],
+                        x=[loc2/fs],
                         y=[raw_data[loc2]],
                         mode='markers',
                         marker = dict(color = 'blue'),
-                        showlegend=False))  
-        
+                        showlegend=False))
+
         st.plotly_chart(fig)
 
         buffer = io.StringIO()
@@ -261,19 +331,19 @@ def main():
         if len(database) == 0:
             st.warning("No data to display.")
             return
-    
+
         # Ensure consistent structure for database
         if isinstance(database[0], (int, float, str)):
             database = [database]
-    
+
         df = pd.DataFrame(database, columns=['Type', 'Stim', 'Timestamp (s)', 'Voltage (V)', 'Latency (ms)'])
         df[["Stim", "Timestamp (s)", "Voltage (V)", "Latency (ms)"]] = df[["Stim", "Timestamp (s)", "Voltage (V)", "Latency (ms)"]].apply(pd.to_numeric)
         df.sort_values(by=['Timestamp (s)'], inplace=True)
-        
+
         st.dataframe(df)
         st.download_button(label="Download data as CSV", data=convert_df(df), file_name=sidebar_filename[0:-4]+'.csv', mime='text/csv')
-    
-    
+
+
 st.title('ERNA Analysis')
 st.subheader('By Srdjan Sumarac')
 
