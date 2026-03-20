@@ -71,16 +71,20 @@ def main():
     seg = block.segments[0]
 
     channels_all = []
+    channel_to_signal_index = []
     for i, signal in enumerate(seg.analogsignals):
         chan_names = signal.array_annotations.get("channel_names", [])
         if len(chan_names) > 0:
-            channels_all.extend(chan_names)
+            for name in chan_names:
+                channels_all.append(name)
+                channel_to_signal_index.append(i)
         else:
             channels_all.append(f"Channel {i+1}")
+            channel_to_signal_index.append(i)
 
 
     selected_name = st.sidebar.selectbox('Enter channel to import: ', channels_all)
-    select_channel = channels_all.index(selected_name)
+    select_channel = channel_to_signal_index[channels_all.index(selected_name)]
 
     raw_data, fs, t_start, t_stop, t = import_smr(sidebar_filename, sidebar_path, select_channel)
     n_samples = len(raw_data)
