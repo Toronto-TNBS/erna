@@ -18,7 +18,7 @@ def filename_list(sidebar_path):
     smr_files = []
 
     for file in os.listdir(sidebar_path):
-        if file.endswith('.smr'):
+        if file.endswith(('.smr', '.smrx')):
             smr_files.append(file)
 
     smr_files.sort()
@@ -36,13 +36,13 @@ def filename_list(sidebar_path):
 def import_smr(filename, path, WaveChan):
     FilePath = os.path.join(path, filename)
 
-    reader = neo.io.Spike2IO(filename=FilePath)
+    reader = neo.io.CedIO(filename=FilePath) if FilePath.endswith('.smrx') else neo.io.Spike2IO(filename=FilePath)
     block = reader.read_block(lazy=False)
     seg = block.segments[0]
 
-    signal = seg.analogsignals[WaveChan]
+    signal = seg.analogsignals[WaveChan[0]]
 
-    raw_data = np.array(signal, dtype=float).flatten()
+    raw_data = np.array(signal, dtype=float)[:, WaveChan[1]]
     fs = float(signal.sampling_rate)
 
     t = np.arange(len(raw_data)) / fs
@@ -66,7 +66,7 @@ def main():
 
     FilePath = os.path.join(sidebar_path, sidebar_filename)
 
-    reader = neo.io.Spike2IO(filename=FilePath)
+    reader = neo.io.CedIO(filename=FilePath) if FilePath.endswith('.smrx') else neo.io.Spike2IO(filename=FilePath)
     block = reader.read_block(lazy=False)
     seg = block.segments[0]
 
@@ -75,12 +75,12 @@ def main():
     for i, signal in enumerate(seg.analogsignals):
         chan_names = signal.array_annotations.get("channel_names", [])
         if len(chan_names) > 0:
-            for name in chan_names:
+            for j, name in enumerate(chan_names):
                 channels_all.append(name)
-                channel_to_signal_index.append(i)
+                channel_to_signal_index.append((i, j))
         else:
             channels_all.append(f"Channel {i+1}")
-            channel_to_signal_index.append(i)
+            channel_to_signal_index.append((i, 0))
 
 
     selected_name = st.sidebar.selectbox('Enter channel to import: ', channels_all)
@@ -327,7 +327,7 @@ def main():
         st.download_button(
             label='Download HTML',
             data=html_bytes,
-            file_name=sidebar_filename[0:-4]+".html",
+            file_name=os.path.splitext(sidebar_filename)[0]+".html",
             mime='text/html'
         )
 
@@ -345,13 +345,13 @@ def main():
         df.sort_values(by=['Timestamp (s)'], inplace=True)
 
         st.dataframe(df)
-        st.download_button(label="Download data as CSV", data=convert_df(df), file_name=sidebar_filename[0:-4]+'.csv', mime='text/csv')
+        st.download_button(label="Download data as CSV", data=convert_df(df), file_name=os.path.splitext(sidebar_filename)[0]+'.csv', mime='text/csv')
 
 
 st.title('ERNA Analysis')
 st.subheader('By Srdjan Sumarac')
 
-sidebar_path = st.sidebar.text_input('Path to .smr files')
+sidebar_path = st.sidebar.text_input('Path to .smr/.smrx files')
 
 if len(sidebar_path) > 0:
     main()

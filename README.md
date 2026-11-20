@@ -1,7 +1,7 @@
 # ERNA GUI
 
 A simple Streamlit app for analyzing evoked resonant neural activity (ERNA) signals.
-It loads .smr files, shows stimulation data, finds peaks and troughs, and lets you export results.
+It loads .smr and .smrx files, shows stimulation data, finds peaks and troughs, and lets you export results.
 
 <img width="1032" height="1153" alt="interface_overview" src="https://github.com/user-attachments/assets/000d0ca6-1390-4979-955b-965a3575d8f1" />
 
@@ -14,6 +14,8 @@ Make sure Python is installed, then install the required packages:
 ```
 pip install streamlit plotly numpy pandas scipy neo
 ```
+
+For .smrx files also run `pip install sonpy`. sonpy works with Python 3.9 to 3.14 on Windows. On macOS it needs Python 3.14 from python.org running in Intel mode (Rosetta on Apple Silicon).
 
 ## How to Run
 
@@ -43,7 +45,7 @@ data/example_file.smr
 
 ## What It Does
 
-* Loads .smr files recorded with Spike2
+* Loads .smr and .smrx files recorded with Spike2
 * Displays raw signals and evoked field averages
 * Lets you select peaks, troughs, and analysis windows interactively
 * Exports results to CSV and interactive HTML files
