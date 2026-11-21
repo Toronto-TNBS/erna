@@ -15,7 +15,17 @@ Make sure Python is installed, then install the required packages:
 pip install streamlit plotly numpy pandas scipy neo
 ```
 
-For .smrx files also run `pip install sonpy`. sonpy works with Python 3.9 to 3.14 on Windows. On macOS it needs Python 3.14 from python.org running in Intel mode (Rosetta on Apple Silicon).
+For .smrx files also install sonpy and a recent neo:
+
+```
+pip install sonpy "neo>=0.14.6"
+```
+
+Older neo versions cannot read the current sonpy (1.9.12), and neo 0.14.6 needs Python 3.10 or newer. Platform support for sonpy:
+
+* Windows: Python 3.10 to 3.14.
+* macOS: Python 3.14 from python.org, running in Intel mode (Rosetta on Apple Silicon). Homebrew and conda Pythons cannot load sonpy because its macOS build is linked to the python.org install location.
+* Linux: Python 3.14 on x86_64 only.
 
 ## How to Run
 
